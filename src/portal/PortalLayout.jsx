@@ -10,6 +10,8 @@ import { warsawISO } from './format.js';
 import Sidebar from './Sidebar.jsx';
 import PortalDialogs from './PortalDialogs.jsx';
 import { useBrowserTools } from './useBrowserTools.js';
+import { useApiRealtime } from './useApiRealtime.js';
+import { logoutAccount } from '../dotnetApi.js';
 
 export default function PortalLayout({ session, refresh }) {
   const { data, signIn, signOut, user } = session;
@@ -39,6 +41,9 @@ export default function PortalLayout({ session, refresh }) {
     setModal({ kind, item });
   }, []);
   useBrowserTools(data, open);
+  const activeStudent = data.students.find(item => item.id === conversation) || data.students[0];
+  const activeThread = data.conversations?.find(item => item.studentId === activeStudent?.id);
+  useApiRealtime(data.api, section === 'messages' ? activeThread?.id : undefined, refresh);
 
   const mutate = useCallback(async (payload, { quiet = false } = {}) => {
     if (data.demo) {
@@ -115,7 +120,14 @@ export default function PortalLayout({ session, refresh }) {
   const summary = section !== 'home' ? page.summary : tutor
     ? 'Yeni bir gün, yeni irəliləyişlər. Gəlin başlayaq.'
     : 'Cześć! Polyak dilində növbəti addımına hazırsan?';
-  const sidebar = { data, section, href, signOut };
+  const sidebar = { data, section, href, signOut, onSignOut: data.api ? async () => {
+    try {
+      await logoutAccount();
+      window.location.assign('/account');
+    } catch (error) {
+      toast.error(error.message);
+    }
+  } : undefined };
   const demoLink = (role) => sectionPath(section === 'students' && role === 'student' ? 'home' : section) + '?demo=' + role;
 
   return (
@@ -158,12 +170,13 @@ export default function PortalLayout({ session, refresh }) {
                 <h1>{section === 'home' ? <>Salam, {data.name.split(' ')[0]} <span className="wave">👋</span></> : page.label}</h1>
                 <p>{summary}</p>
               </div>
-              {tutor && page.action ? (
+              {tutor && page.action && !(data.api && section === 'students') ? (
                 <button type="button" className="btn primary" onClick={() => open(page.action[1])}><Plus size={18} />{page.action[0]}</button>
               ) : section === 'home' && (
                 <Link className="btn primary" to={href('materials')}><BookOpen size={18} /> Öyrənməyə davam et</Link>
               )}
             </div>
+            {data.unassigned && <p className="demo-notice">Müəllim təyinatı gözlənilir. Administratorla əlaqə saxlayın.</p>}
             <Outlet context={pageProps} />
             <footer className="page-footer">
               <span>PolskiYol <span>·</span> Polyak dili, birlikdə.</span>

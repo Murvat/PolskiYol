@@ -27,6 +27,14 @@ for (const path of (await readdir(client, { recursive: true, withFileTypes: true
 await Promise.all([rm(server, { recursive: true, force: true }), rm(metadata, { recursive: true, force: true })]);
 await mkdir(metadata, { recursive: true });
 
+async function copyHostingMetadata() {
+  try {
+    await cp(resolve(root, '.openai/hosting.json'), resolve(metadata, 'hosting.json'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
 await Promise.all([
   build({
     absWorkingDir: root,
@@ -51,6 +59,6 @@ await Promise.all([
       },
     }],
   }),
-  cp(resolve(root, '.openai/hosting.json'), resolve(metadata, 'hosting.json')),
+  copyHostingMetadata(),
   cp(resolve(root, 'drizzle'), resolve(metadata, 'drizzle'), { recursive: true }),
 ]);

@@ -7,7 +7,7 @@ import { Avatar, Badge, Blank } from '../shared.jsx';
 const columns = ['Tələbə', 'Səviyyə', 'Məqsəd', 'İrəliləyiş', 'Hesab'];
 const menuItem = 'flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-2 text-sm outline-none data-[highlighted]:bg-accent [&_svg]:size-4';
 
-function StudentMenu({ student, open, invite, setConfirm, onMessage }) {
+function StudentMenu({ student, api, open, invite, setConfirm, onMessage }) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -21,9 +21,9 @@ function StudentMenu({ student, open, invite, setConfirm, onMessage }) {
           sideOffset={4}
           className="z-50 min-w-48 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
         >
-          <DropdownMenu.Item className={menuItem} onSelect={() => open('student', student)}>
+          {!api && <DropdownMenu.Item className={menuItem} onSelect={() => open('student', student)}>
             <Pencil /> Düzəliş et
-          </DropdownMenu.Item>
+          </DropdownMenu.Item>}
           <DropdownMenu.Item className={menuItem} onSelect={() => open('lesson', { student_id: student.id })}>
             <CalendarDays /> Dərs planlaşdır
           </DropdownMenu.Item>
@@ -35,13 +35,13 @@ function StudentMenu({ student, open, invite, setConfirm, onMessage }) {
               <Link2 /> Dəvət keçidi yarat
             </DropdownMenu.Item>
           )}
-          <DropdownMenu.Separator className="my-1 h-px bg-border" />
+          {!api && <><DropdownMenu.Separator className="my-1 h-px bg-border" />
           <DropdownMenu.Item
             className={`${menuItem} danger-text`}
             onSelect={() => setConfirm({ entity: 'students', id: student.id, title: student.name })}
           >
             <Trash2 /> Tələbəni sil
-          </DropdownMenu.Item>
+          </DropdownMenu.Item></>}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -80,7 +80,7 @@ export default function Students({ data, open, invite, setConfirm, selectConvers
         <table className="w-full text-left">
           <thead>
             <tr>
-              {columns.map(label => <th key={label} scope="col">{label}</th>)}
+              {(data.api ? ['Tələbə', 'Telefon'] : columns).map(label => <th key={label} scope="col">{label}</th>)}
               <th scope="col"><span className="sr-only">Əməliyyatlar</span></th>
             </tr>
           </thead>
@@ -88,14 +88,16 @@ export default function Students({ data, open, invite, setConfirm, selectConvers
             {students.map((student, index) => (
               <tr className="border-b last:border-b-0" key={student.id}>
                 <td>
+                  {data.api ? <span className="table-person"><Avatar name={student.name} tone={index} /><strong>{student.name}</strong></span> : (
                   <button type="button" className="table-person" onClick={() => open('student', student)}>
                     <Avatar name={student.name} tone={index} />
                     <span>
                       <strong>{student.name}</strong>
                       <small>{student.email}</small>
                     </span>
-                  </button>
+                  </button>)}
                 </td>
+                {data.api ? <td>{student.phone}</td> : (<>
                 <td><Badge tone={student.level.startsWith('B') ? 'purple' : 'green'}>{student.level}</Badge></td>
                 <td className="muted">{student.goal || '—'}</td>
                 <td>
@@ -114,9 +116,10 @@ export default function Students({ data, open, invite, setConfirm, selectConvers
                     </div>
                   </div>
                 </td>
-                <td><Badge tone={student.user_id ? 'green' : 'neutral'}>{student.user_id ? 'Aktiv' : 'Dəvət gözləyir'}</Badge></td>
+                <td><Badge tone={student.user_id ? 'green' : 'neutral'}>{student.user_id ? 'Aktiv' : 'Dəvət gözləyir'}</Badge></td></>)}
                 <td>
                   <StudentMenu
+                    api={data.api}
                     student={student}
                     open={open}
                     invite={invite}
@@ -130,7 +133,7 @@ export default function Students({ data, open, invite, setConfirm, selectConvers
         </table>
       </div>
       {!data.students.length && (
-        <Blank title="İlk tələbənlə başla" body="Tələbə əlavə et, sonra ona şəxsi dəvət keçidini göndər." icon={UsersRound} />
+        <Blank title="İlk tələbənlə başla" body={data.api ? "Tələbələr administrator tərəfindən təyin edilir." : "Tələbə əlavə et, sonra ona şəxsi dəvət keçidini göndər."} icon={UsersRound} />
       )}
       {!!data.students.length && !students.length && (
         <Blank title="Tələbə tapılmadı" body="Fərqli ad və ya e-poçtla axtar." />

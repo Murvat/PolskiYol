@@ -40,7 +40,7 @@ function PaymentSummary({ payments, tutor }) {
   );
 }
 
-function PaymentRow({ payment, today, tutor, quick, setConfirm, student }) {
+function PaymentRow({ payment, today, tutor, api, quick, setConfirm, student }) {
   const paid = payment.status === 'paid';
   const actions = [
     {
@@ -76,7 +76,7 @@ function PaymentRow({ payment, today, tutor, quick, setConfirm, student }) {
       </td>
       {tutor && (
         <td>
-          <ActionsMenu label={payment.title + ' — seçimlər'} actions={actions} />
+          {(!api || !paid) && <ActionsMenu label={payment.title + ' — seçimlər'} actions={api ? actions.slice(0, 1) : actions} />}
         </td>
       )}
     </tr>
@@ -112,6 +112,7 @@ export default function Payments({ data, tutor, filter, setFilter, quick, setCon
                   key={payment.id}
                   payment={payment}
                   today={data.today}
+                  api={data.api}
                   tutor={tutor}
                   quick={quick}
                   setConfirm={setConfirm}

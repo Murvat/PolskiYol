@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Avatar, Brand, menuClass, menuItemClass } from './shared.jsx';
 import { sections } from './navigation.js';
 
-export default function Sidebar({ data, section, href, signOut, onNavigate, mobile = false }) {
+export default function Sidebar({ data, section, href, signOut, onSignOut, onNavigate, mobile = false }) {
   const isTutor = data.role === 'tutor';
   const unread = data.messages.filter((message) => !message.read_at && message.sender_role !== data.role).length;
 
@@ -60,7 +60,7 @@ export default function Sidebar({ data, section, href, signOut, onNavigate, mobi
                   <Link to="/account" onClick={onNavigate}><UserRound /> Hesabım</Link>
                 </DropdownMenu.Item>
                 {!data.demo && <DropdownMenu.Item asChild className={menuItemClass}>
-                  <a href={signOut} target="_top"><LogOut /> Çıxış</a>
+                  {onSignOut ? <button type="button" onClick={onSignOut}><LogOut /> Çıxış</button> : <a href={signOut} target="_top"><LogOut /> Çıxış</a>}
                 </DropdownMenu.Item>}
               </DropdownMenu.Content>
             </DropdownMenu.Portal>

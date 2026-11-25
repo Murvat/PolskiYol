@@ -165,13 +165,13 @@ function NextLesson({ lesson, students, tutorName, tutor, open }) {
   );
 }
 
-function QuickPanel({ tutor, student, open }) {
+function QuickPanel({ tutor, student, open, api }) {
   const progress = student?.progress ?? 0;
 
   return (
     <section className="panel quick-panel">
       <h2>{tutor ? 'Sürətli əməliyyatlar' : 'Öyrənmə irəliləyişim'}</h2>
-      {tutor ? quickActions.map(({ kind, label, tone, icon: Icon }) => (
+      {tutor ? quickActions.filter(action => !api || action.kind !== 'student').map(({ kind, label, tone, icon: Icon }) => (
         <button type="button" key={kind} onClick={() => open(kind)}>
           <span className={`quick-icon ${tone}`}><Icon size={19} /></span>
           <span>{label}</span>
@@ -267,7 +267,7 @@ export default function Home({ data, tutor, href, open, selectedDay, setSelected
         </div>
         <aside className="dashboard-right">
           <NextLesson lesson={nextLesson} students={data.students} tutorName={data.tutorName} tutor={tutor} open={open} />
-          <QuickPanel tutor={tutor} student={data.students[0]} open={open} />
+          <QuickPanel tutor={tutor} api={data.api} student={data.students[0]} open={open} />
           <div className="language-note">
             <span>🇦🇿</span><span className="dashed-line" /><BookOpen size={19} />
             <span className="dashed-line" /><span>🇵🇱</span>

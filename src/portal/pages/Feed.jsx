@@ -53,7 +53,7 @@ export function PostCard({ post, data, tutor, open, setConfirm, compact = false,
           <small>{fmtDate(post.created_at)} · Bütün tələbələr üçün</small>
         </div>
         <Badge tone={post.category === 'Elan' ? 'blue' : 'amber'}>{post.category}</Badge>
-        {tutor && !compact && <ActionsMenu label="Paylaşım seçimləri" actions={actions} />}
+        {tutor && !compact && <ActionsMenu label="Paylaşım seçimləri" actions={data.api ? actions.slice(1) : actions} />}
       </div>
       <h3>{post.title}</h3>
       <p>{post.body}</p>

@@ -37,7 +37,7 @@ export function MaterialCard({ material, index = 0, open, tutor }) {
           type="button"
           className="material-edit icon-button"
           aria-label={material.title + ' — düzəliş et'}
-          onClick={() => open('material', material)}
+          onClick={() => open(material.apiFile ? 'cover' : 'material', material)}
         >
           <Pencil size={16} aria-hidden="true" />
         </button>

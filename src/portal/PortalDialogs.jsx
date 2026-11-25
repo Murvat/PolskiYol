@@ -1,4 +1,5 @@
-import { useRef } from 'react';
+import { downloadMaterial, readMaterialCover } from '../dotnetApi.js';
+import { useEffect, useRef, useState } from 'react';
 import { AlertDialog, Dialog } from 'radix-ui';
 import {
   ArrowRight,
@@ -117,7 +118,7 @@ function StudentFields({ item, busy, invite, setConfirm }) {
   );
 }
 
-function LessonFields({ item, selectedDay }) {
+function LessonFields({ item, selectedDay, api }) {
   const chosenDuration = item?.duration ?? 60;
   const durations = [...new Set([30, 45, 60, 90, 120, chosenDuration])].sort((a, b) => a - b);
   return (
@@ -139,9 +140,9 @@ function LessonFields({ item, selectedDay }) {
           options={durations.map(duration => ({ value: String(duration), label: duration + ' dəqiqə' }))}
         />
       </div>
-      <Field label="Onlayn dərs keçidi" optional>
+      {!api && <Field label="Onlayn dərs keçidi" optional>
         <input className={inputClass} name="meeting_url" type="url" placeholder="https://meet.google.com/…" defaultValue={item?.meeting_url} maxLength={2000} />
-      </Field>
+      </Field>}
     </>
   );
 }
@@ -159,8 +160,16 @@ function PaymentFields({ today }) {
   );
 }
 
-function ContentFields({ kind, item }) {
+function ContentFields({ kind, item, api }) {
   const isPost = kind === 'post';
+  if (api && !isPost) return (
+    <>
+      <Field label={kind === 'cover' ? 'Üz qabığı (PNG və ya JPEG)' : 'PDF sənədi'}>
+        <input className={inputClass} type="file" name="file" accept={kind === 'cover' ? 'image/png,image/jpeg' : 'application/pdf,.pdf'} required />
+      </Field>
+      {kind !== 'cover' && <Field label="Təsvir" optional><textarea className={inputClass} name="body" maxLength={1000} rows={4} /></Field>}
+    </>
+  );
   return (
     <>
       <Field label="Başlıq">
@@ -168,12 +177,12 @@ function ContentFields({ kind, item }) {
           className={inputClass}
           name="title"
           required
-          maxLength={180}
+          maxLength={api ? 150 : 180}
           defaultValue={item?.title}
           placeholder={isPost ? 'Nə bölüşmək istəyirsən?' : 'Məsələn, İlk polyakca söhbətin'}
         />
       </Field>
-      <div className={columnsClass}>
+      {!api && <div className={columnsClass}>
         <SelectField
           label="Kateqoriya"
           name="category"
@@ -181,14 +190,14 @@ function ContentFields({ kind, item }) {
           options={isPost ? postCategories : materialCategories}
         />
         {!isPost && <SelectField label="Səviyyə" name="level" defaultValue={item?.level || 'A1'} options={levels} />}
-      </div>
+      </div>}
       <Field label="Məzmun">
         <textarea
           className={inputClass + ' resize-y leading-relaxed'}
           name="body"
           rows={6}
           required
-          maxLength={15000}
+          maxLength={api ? 4000 : 15000}
           defaultValue={item?.body}
           placeholder={isPost ? 'Tələbələrin üçün bir qeyd yaz…' : 'Dərs izahı, nümunələr və tapşırıqlar…'}
         />
@@ -226,12 +235,12 @@ function PortalForm({ modal, data, busy, formError, formSubmit, close, selectedD
           ) : (
             <div className={hintClass}>
               Əvvəlcə tələbə əlavə edin.{' '}
-              <button type="button" className="text-link" onClick={() => open('student')}>
+              <button type="button" className="text-link" onClick={() => data.api ? window.location.assign('/account') : open('student')}>
                 Tələbə əlavə et <ArrowRight size={15} />
               </button>
             </div>
           )}
-          <Field label={isLesson ? 'Dərsin mövzusu' : 'Ödənişin təsviri'}>
+          {(isLesson || !data.api) && <Field label={isLesson ? 'Dərsin mövzusu' : 'Ödənişin təsviri'}>
             <input
               className={inputClass}
               name="title"
@@ -240,12 +249,12 @@ function PortalForm({ modal, data, busy, formError, formSubmit, close, selectedD
               defaultValue={item?.title}
               placeholder={isLesson ? 'Məsələn, Kafedə ünsiyyət' : 'Məsələn, Oktyabr · 4 fərdi dərs'}
             />
-          </Field>
+          </Field>}
         </>
       )}
-      {isLesson && <LessonFields item={item} selectedDay={selectedDay} />}
+      {isLesson && <LessonFields item={item} selectedDay={selectedDay} api={data.api} />}
       {kind === 'payment' && <PaymentFields today={data.today} />}
-      {(kind === 'material' || kind === 'post') && <ContentFields kind={kind} item={item} />}
+      {(kind === 'material' || kind === 'post' || kind === 'cover') && <ContentFields kind={kind} item={item} api={data.api} />}
       {formError && <p role="alert" className="form-error">{formError}</p>}
       <div className="mt-1.5 flex flex-wrap justify-end gap-2.5 border-t border-[#edf1e8] pt-4">
         <button type="button" className="btn secondary" onClick={close}>Vaz keç</button>
@@ -326,11 +335,36 @@ function LessonDetail({ item, student, tutor, tutorName, busy, open, quick, setC
   );
 }
 
+function MaterialCover({ item }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (!item.hasCover) return undefined;
+    let active = true;
+    let imageUrl;
+    void readMaterialCover(item).then(blob => {
+      if (!active) return;
+      imageUrl = URL.createObjectURL(blob);
+      setUrl(imageUrl);
+    }).catch(() => {});
+
+    return () => {
+      active = false;
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+    };
+  }, [item]);
+
+  return url ? <img src={url} alt={item.title} className="mb-4 max-h-56 rounded object-contain" /> : null;
+}
+
 function MaterialReading({ item, tutor, busy, open, setConfirm }) {
   return (
     <>
+      {item.apiFile && item.hasCover && <MaterialCover key={item.id} item={item} />}
       <div className="py-4 text-base leading-loose whitespace-pre-wrap wrap-anywhere text-[#49623e]">{item.body}</div>
       <div className="mt-3 flex flex-wrap items-center gap-2.5">
+        {item.apiFile && <button className="btn primary" onClick={() => {
+          void downloadMaterial(item).catch(error => toast.error(error.message));
+        }}>PDF yüklə</button>}
         {item.url && (
           <a className="btn primary" href={item.url} target="_blank" rel="noopener noreferrer">
             <ExternalLink size={17} /> Mənbəni aç
@@ -338,7 +372,7 @@ function MaterialReading({ item, tutor, busy, open, setConfirm }) {
         )}
         {tutor && (
           <>
-            <button className="btn secondary" onClick={() => open('material', item)}><Pencil size={16} /> Düzəliş et</button>
+            <button className="btn secondary" onClick={() => open(item.apiFile ? 'cover' : 'material', item)}><Pencil size={16} /> {item.apiFile ? 'Üz qabığı' : 'Düzəliş et'}</button>
             <button
               className="icon-button danger-text"
               aria-label="Materialı sil"
@@ -357,6 +391,7 @@ function MaterialReading({ item, tutor, busy, open, setConfirm }) {
 function dialogHeading(modal) {
   if (!modal) return {};
   const { kind, item } = modal;
+  if (kind === 'cover') return { title: 'Üz qabığı əlavə et', description: item.title };
   if (kind === 'read') return { title: item.title, description: item.category + ' · ' + item.level + ' səviyyəsi' };
   const titles = { auth: 'Öz öyrənmə məkanına keç', invite: 'Tələbənin dəvəti hazırdır', lessonDetail: 'Dərs məlumatları' };
   return { title: formTitles[kind]?.[item?.id ? 1 : 0] || titles[kind], description: dialogDescriptions[kind] };
@@ -437,7 +472,7 @@ export default function PortalDialogs({ data, tutor, signedIn, signIn, modal, se
               <div className="flex flex-col gap-3.5">
                 <div className="mx-auto my-4 rounded-[18px] bg-[#f1f7ea] p-6 text-[#6d9b4e]"><ShieldCheck size={36} /></div>
                 <a className="btn primary full" href={signedIn ? '/account' : signIn} target="_top">
-                  {signedIn ? 'Hesabıma keç' : 'ChatGPT ilə daxil ol'} <ArrowRight size={18} />
+                  {signedIn ? 'Hesabıma keç' : (signIn === '/account' ? 'Daxil ol' : 'ChatGPT ilə daxil ol')} <ArrowRight size={18} />
                 </a>
                 <button className="btn secondary full" onClick={close}>Nümunəyə baxmağa davam et</button>
               </div>
@@ -445,9 +480,9 @@ export default function PortalDialogs({ data, tutor, signedIn, signIn, modal, se
             {kind === 'invite' && <Invitation code={modal.code} />}
             {kind === 'read' && <MaterialReading item={modal.item} tutor={tutor} busy={busy} open={open} setConfirm={setConfirm} />}
             {kind === 'lessonDetail' && (
-              <LessonDetail item={modal.item} student={student} tutor={tutor} tutorName={data.tutorName} busy={busy} open={open} quick={quick} setConfirm={setConfirm} />
+              <LessonDetail item={modal.item} student={student} tutor={tutor && !data.api} tutorName={data.tutorName} busy={busy} open={open} quick={quick} setConfirm={setConfirm} />
             )}
-            {formTitles[kind] && (
+            {(formTitles[kind] || kind === 'cover') && (
               <PortalForm key={kind + ':' + (modal.item?.id || '')} {...{ modal, data, busy, formError, formSubmit, close, selectedDay, open, invite, setConfirm }} />
             )}
             <Dialog.Close className="icon-button absolute top-4 right-4" aria-label="Bağla"><X size={19} /></Dialog.Close>

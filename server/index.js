@@ -1,5 +1,6 @@
 import assets from 'polskiyol-client-assets';
 import { handleApi } from './api.js';
+import { isDotnetRoute, proxyDotnet } from './dotnetProxy.js';
 
 const pages = new Set(['/', '/home', '/students', '/lessons', '/materials', '/feed', '/messages', '/payments', '/account']);
 
@@ -18,6 +19,13 @@ function serveAsset(request, asset, options = {}) {
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
+    if (env.POLSKIYOL_API_TARGET && isDotnetRoute(pathname)) {
+      try {
+        return await proxyDotnet(request, env.POLSKIYOL_API_TARGET);
+      } catch {
+        return Response.json({ error: 'API ilə əlaqə qurmaq mümkün olmadı.' }, { status: 502 });
+      }
+    }
     if (pathname.startsWith('/api/')) {
       return await handleApi(request, env) ?? Response.json({ error: 'Sorğu tapılmadı.' }, { status: 404 });
     }

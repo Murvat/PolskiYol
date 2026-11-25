@@ -4,6 +4,8 @@ import {
 } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import Account from './Account.jsx';
+import ApiAccount from './ApiAccount.jsx';
+import { useDotnetApi } from './dotnetApi.js';
 import PortalLayout from './portal/PortalLayout.jsx';
 import Home from './portal/pages/Home.jsx';
 import Students from './portal/pages/Students.jsx';
@@ -62,6 +64,7 @@ function SessionRoute() {
     return <Screen title="PolskiYol"><p role="status">Məlumatlar yüklənir…</p></Screen>;
   }
 
+  if (useDotnetApi && (route.account || !session.data)) return <ApiAccount user={session.user} />;
   if (route.account) return <AccountPage session={session} invite={invite} />;
   if (route.section === 'students' && session.data.role === 'student') return <NotFound />;
 

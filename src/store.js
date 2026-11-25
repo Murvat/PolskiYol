@@ -1,5 +1,14 @@
+import { changeApiPortal, loadApiSession, useDotnetApi } from './dotnetApi.js';
 import { configureStore } from '@reduxjs/toolkit';
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+async function runApi(operation) {
+  try {
+    return { data: await operation() };
+  } catch (error) {
+    return { error: { status: error.status || 'CUSTOM_ERROR', data: { error: error.message } } };
+  }
+}
 
 export const portalApi = createApi({
   reducerPath: 'portalApi',
@@ -7,12 +16,19 @@ export const portalApi = createApi({
   tagTypes: ['Portal'],
   endpoints: (build) => ({
     session: build.query({
-      query: (params) => ({ url: 'session', params }),
+      async queryFn(params, _api, _extra, workerQuery) {
+        if (!useDotnetApi || params.demo) return workerQuery({ url: 'session', params });
+        return runApi(() => loadApiSession(params));
+      },
       providesTags: (_result, _error, { account, demo }) =>
         account || demo ? [] : ['Portal'],
     }),
     changePortal: build.mutation({
-      query: (body) => ({ url: 'portal', method: 'POST', body }),
+      async queryFn(body, { getState }, _extra, workerQuery) {
+        if (!useDotnetApi) return workerQuery({ url: 'portal', method: 'POST', body });
+        const session = portalApi.endpoints.session.select({ demo: undefined })(getState()).data;
+        return runApi(async () => (await changeApiPortal(body, session)).data);
+      },
       invalidatesTags: (_result, error) => (error ? [] : ['Portal']),
     }),
   }),

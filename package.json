@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/build-worker.mjs",
     "test": "node scripts/verify-portal.mjs"
   },
   "dependencies": {
+    "@microsoft/signalr": "^10.0.11",
     "@reduxjs/toolkit": "^2.11.0",
     "lucide-react": "^0.468.0",
     "radix-ui": "^1.4.0",
