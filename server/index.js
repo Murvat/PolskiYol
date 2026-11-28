@@ -1,7 +1,9 @@
 import assets from 'polskiyol-client-assets';
 import { handleApi } from './api.js';
+import { liveHandlers } from './live/index.js';
 
 const pages = new Set(['/', '/home', '/students', '/lessons', '/materials', '/feed', '/messages', '/payments', '/account']);
+const livePage = /^\/lessons\/[a-z0-9_-]{1,100}\/live$/i;
 
 function serveAsset(request, asset, options = {}) {
   const { status = 200, cache = 'no-cache' } = options;
@@ -16,10 +18,14 @@ function serveAsset(request, asset, options = {}) {
 }
 
 export default {
-  async fetch(request, env) {
+  scheduled(_event, env, context) {
+    context.waitUntil(liveHandlers.scheduled(env));
+  },
+
+  async fetch(request, env, context) {
     const { pathname } = new URL(request.url);
     if (pathname.startsWith('/api/')) {
-      return await handleApi(request, env) ?? Response.json({ error: 'Sorğu tapılmadı.' }, { status: 404 });
+      return await liveHandlers.fetch(request, env, context) ?? await handleApi(request, env, context) ?? Response.json({ error: 'Sorğu tapılmadı.' }, { status: 404 });
     }
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -34,6 +40,6 @@ export default {
     if (pathname.startsWith('/assets/')) return new Response('Asset not found', { status: 404 });
 
     const page = pathname.replace(/\/$/, '') || '/';
-    return serveAsset(request, assets['/index.html'], { status: pages.has(page) ? 200 : 404 });
+    return serveAsset(request, assets['/index.html'], { status: pages.has(page) || livePage.test(page) ? 200 : 404 });
   },
 };

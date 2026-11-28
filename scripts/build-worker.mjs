@@ -51,6 +51,9 @@ await Promise.all([
       },
     }],
   }),
-  cp(resolve(root, '.openai/hosting.json'), resolve(metadata, 'hosting.json')),
+  cp(resolve(root, '.openai/hosting.json'), resolve(metadata, 'hosting.json')).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    console.warn('Sites hosting descriptor unavailable. Built Worker and migrations for local verification.');
+  }),
   cp(resolve(root, 'drizzle'), resolve(metadata, 'drizzle'), { recursive: true }),
 ]);

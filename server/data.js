@@ -16,7 +16,22 @@ export async function actorFor(db, user) {
   return student ? { role: 'student', studentId: student.id, name: student.name, tutorName } : null;
 }
 
-export async function portalData(db, actor) {
+function lessonMembership(alias) {
+  return `EXISTS (SELECT 1 FROM lesson_students WHERE lesson_id = ${alias}.id AND student_id = ?)`;
+}
+
+export async function lessonForActor(db, actor, lessonId) {
+  if (actor.role === 'tutor') {
+    return db.prepare('SELECT * FROM lessons WHERE id = ?').bind(lessonId).first();
+  }
+  if (actor.role === 'student') {
+    return db.prepare(`SELECT * FROM lessons l WHERE l.id = ? AND ${lessonMembership('l')}`)
+      .bind(lessonId, actor.studentId).first();
+  }
+  return null;
+}
+
+export async function portalData(db, actor, liveLessonsEnabled = false) {
   const isStudent = actor.role === 'student';
   const scope = (table, order) => isStudent
     ? db.prepare(`SELECT * FROM ${table} WHERE student_id = ? ORDER BY ${order}`).bind(actor.studentId)
@@ -26,10 +41,21 @@ export async function portalData(db, actor) {
   const studentsQuery = isStudent
     ? db.prepare(`SELECT ${studentColumns} FROM students WHERE id = ?`).bind(actor.studentId)
     : db.prepare(`SELECT ${studentColumns} FROM students ORDER BY created_at DESC`);
+  const lessonColumns = `l.id, l.title, l.starts_at, l.duration, l.meeting_url, l.meeting_type, l.status,
+    (SELECT count(*) FROM lesson_students WHERE lesson_id = l.id) AS student_count`;
+  const lessonsQuery = isStudent
+    ? db.prepare(`SELECT ${lessonColumns} FROM lessons l WHERE ${lessonMembership('l')} ORDER BY l.starts_at ASC`)
+      .bind(actor.studentId)
+    : db.prepare(`
+        SELECT ${lessonColumns}, (
+          SELECT json_group_array(student_id) FROM lesson_students WHERE lesson_id = l.id
+        ) AS roster
+        FROM lessons l ORDER BY l.starts_at ASC
+      `);
 
   const [students, lessons, payments, materials, posts, messages] = await db.batch([
     studentsQuery,
-    scope('lessons', 'starts_at ASC'),
+    lessonsQuery,
     scope('payments', 'due_date DESC'),
     db.prepare('SELECT * FROM materials ORDER BY created_at DESC'),
     db.prepare('SELECT * FROM posts ORDER BY created_at DESC'),
@@ -39,9 +65,13 @@ export async function portalData(db, actor) {
   return {
     ...actor,
     demo: false,
+    liveLessonsEnabled,
     today: new Date().toISOString().slice(0, 10),
     students: students.results,
-    lessons: lessons.results,
+    lessons: lessons.results.map(({ roster, ...lesson }) => {
+      const studentIds = isStudent ? [actor.studentId] : JSON.parse(roster);
+      return { ...lesson, student_id: studentIds[0] ?? null, student_ids: studentIds };
+    }),
     payments: payments.results,
     materials: materials.results,
     posts: posts.results,

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { dayKey, fmtDate, fmtTime } from '../format.js';
+import { lessonStudents } from '../lessons.js';
 import { Avatar, Badge, Blank } from '../shared.jsx';
 
 const monthNames = [
@@ -76,7 +77,7 @@ function MonthCalendar({ today, selectedDay, setSelectedDay, lessonsByDay, tutor
               {lessons.slice(0, 2).map(lesson => (
                 <span className="calendar-event" key={lesson.id}>
                   <b>{fmtTime(lesson.starts_at)}</b>
-                  <span>{tutor ? studentNames.get(lesson.student_id)?.split(' ')[0] : lesson.title}</span>
+                  <span>{tutor && lessonStudents(lesson).length === 1 ? studentNames.get(lessonStudents(lesson)[0])?.split(' ')[0] : lesson.title}</span>
                 </span>
               ))}
               {lessons.length > 2 && <small>+{lessons.length - 2} dərs</small>}
@@ -96,7 +97,7 @@ function DayAgenda({ selectedDay, lessons, open, personName }) {
         <Badge>{lessons.length} dərs</Badge>
       </div>
       {lessons.map(lesson => {
-        const person = personName(lesson.student_id);
+        const person = personName(lesson);
         return (
           <button type="button" className="day-lesson" key={lesson.id} onClick={() => open('lessonDetail', lesson)}>
             <span><Clock size={15} />{fmtTime(lesson.starts_at)} · {lesson.duration} dəq.</span>
@@ -139,7 +140,7 @@ function LessonHistory({ lessons, tutor, studentNames, open }) {
           <thead>
             <tr className="border-b">
               <th scope="col">Mövzu</th>
-              {tutor && <th scope="col">Tələbə</th>}
+              {tutor && <th scope="col">Tələbələr</th>}
               <th scope="col">Tarix və saat</th>
               <th scope="col">Müddət</th>
               <th scope="col">Status</th>
@@ -152,7 +153,7 @@ function LessonHistory({ lessons, tutor, studentNames, open }) {
               return (
                 <tr key={lesson.id} className="border-b last:border-0 hover:bg-muted/50">
                   <td><strong>{lesson.title}</strong></td>
-                  {tutor && <td>{studentNames.get(lesson.student_id)}</td>}
+                  {tutor && <td>{lessonStudents(lesson).map(id => studentNames.get(id)).filter(Boolean).join(', ')}</td>}
                   <td>{fmtDate(lesson.starts_at)} · {fmtTime(lesson.starts_at)}</td>
                   <td>{lesson.duration} dəq.</td>
                   <td><Badge tone={status.tone}>{status.label}</Badge></td>
@@ -204,7 +205,7 @@ export default function Lessons({ data, tutor, open, selectedDay, setSelectedDay
           selectedDay={selectedDay}
           lessons={lessonsByDay.get(selectedDay) ?? []}
           open={open}
-          personName={studentId => tutor ? studentNames.get(studentId) ?? '' : data.tutorName}
+          personName={lesson => tutor ? lessonStudents(lesson).map(id => studentNames.get(id)).filter(Boolean).join(', ') : data.tutorName}
         />
       </div>
       <LessonHistory lessons={data.lessons} tutor={tutor} studentNames={studentNames} open={open} />

@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import {
-  createBrowserRouter, Link, Outlet, useMatches, useOutletContext, useSearchParams,
+  createBrowserRouter, Link, Outlet, useLocation, useMatches, useOutletContext, useSearchParams,
 } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import Account from './Account.jsx';
@@ -44,10 +44,13 @@ function AccountPage({ session, invite }) {
 
 function SessionRoute() {
   const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
   const route = useMatches().at(-1).handle;
   const invite = searchParams.get('invite') || '';
   const demo = searchParams.get('demo');
-  const request = route.account ? { account: '1', invite } : { demo: demo === null || demo === '' ? undefined : demo };
+  const request = route.account ? { account: '1', invite }
+    : route.live ? { return_to: pathname.replace(/\/$/, '') }
+    : { demo: demo === null || demo === '' ? undefined : demo };
   const { currentData: session, refetch, isError } = useSessionQuery(request);
 
   const refresh = useCallback(() => refetch().unwrap(), [refetch]);
@@ -63,6 +66,11 @@ function SessionRoute() {
   }
 
   if (route.account) return <AccountPage session={session} invite={invite} />;
+  if (route.live) {
+    if (!session.user) return <Screen title="Canlı dərs"><a className="btn primary" href={session.signIn} target="_top">Daxil ol</a></Screen>;
+    if (session.data.demo) return <Screen title="Dərs hesabı aktiv deyil"><Link className="btn primary" to="/account">Hesabıma keç</Link></Screen>;
+    return <Outlet />;
+  }
   if (route.section === 'students' && session.data.role === 'student') return <NotFound />;
 
   const { demo: isDemo, role, studentId } = session.data;
@@ -95,6 +103,7 @@ export const router = createBrowserRouter([{
       children: [
         { index: true, handle: { section: 'home' }, element: <PortalPage key="home" Page={Home} /> },
         ...portalRoutes,
+        { path: 'lessons/:lessonId/live', caseSensitive: true, handle: { live: true }, lazy: () => import('./live/LiveRoom.jsx') },
         { path: 'account', caseSensitive: true, handle: { account: true }, element: null },
       ],
     },

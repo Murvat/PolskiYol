@@ -1,5 +1,6 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { AlertDialog, Dialog } from 'radix-ui';
+import { Link } from 'react-router-dom';
 import {
   ArrowRight,
   CalendarDays,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { fmtDate, fmtTime, localInput } from './format';
+import { lessonStudents, liveLessonPath } from './lessons.js';
 import { Avatar, Badge } from './shared';
 
 const levels = ['A0', 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
@@ -117,7 +119,34 @@ function StudentFields({ item, busy, invite, setConfirm }) {
   );
 }
 
-function LessonFields({ item, selectedDay }) {
+function LessonRoster({ students, item }) {
+  const [selected, setSelected] = useState(() => lessonStudents(item).length ? lessonStudents(item) : [students[0].id]);
+  return (
+    <fieldset className={fieldClass}>
+      <legend>Tələbələr</legend>
+      <p className="text-xs font-normal">Bir dərs üçün 1–5 tələbə seçin.</p>
+      <div className="grid max-h-40 gap-2 overflow-y-auto rounded-lg border border-[#dce5d6] p-3">
+        {students.map(({ id, name }) => (
+          <label key={id} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              name="student_ids"
+              value={id}
+              checked={selected.includes(id)}
+              disabled={selected.length >= 5 && !selected.includes(id)}
+              onChange={({ target }) => setSelected(ids => target.checked ? [...ids, id] : ids.filter(value => value !== id))}
+              className="size-4 accent-[#426333]"
+            />
+            {name}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function LessonFields({ item, selectedDay, liveLessonsEnabled }) {
+  const [meetingType, setMeetingType] = useState(item?.meeting_type || (liveLessonsEnabled && !item?.id ? 'live' : 'external'));
   const chosenDuration = item?.duration ?? 60;
   const durations = [...new Set([30, 45, 60, 90, 120, chosenDuration])].sort((a, b) => a - b);
   return (
@@ -139,9 +168,19 @@ function LessonFields({ item, selectedDay }) {
           options={durations.map(duration => ({ value: String(duration), label: duration + ' dəqiqə' }))}
         />
       </div>
-      <Field label="Onlayn dərs keçidi" optional>
-        <input className={inputClass} name="meeting_url" type="url" placeholder="https://meet.google.com/…" defaultValue={item?.meeting_url} maxLength={2000} />
-      </Field>
+      {liveLessonsEnabled ? (
+        <Field label="Dərs məkanı">
+          <select className={inputClass} name="meeting_type" value={meetingType} onChange={event => setMeetingType(event.target.value)}>
+            <option value="live">PolskiYol canlı dərsi</option>
+            <option value="external">Xarici görüş keçidi</option>
+          </select>
+        </Field>
+      ) : <input type="hidden" name="meeting_type" value={meetingType} />}
+      <div hidden={meetingType !== 'external'}>
+        <Field label="Onlayn dərs keçidi" optional>
+          <input className={inputClass} name="meeting_url" type="url" disabled={meetingType !== 'external'} placeholder="https://meet.google.com/…" defaultValue={item?.meeting_url} maxLength={2000} />
+        </Field>
+      </div>
     </>
   );
 }
@@ -216,7 +255,9 @@ function PortalForm({ modal, data, busy, formError, formSubmit, close, selectedD
       {kind === 'student' && <StudentFields item={item} busy={busy} invite={invite} setConfirm={setConfirm} />}
       {requiresStudent && (
         <>
-          {data.students.length ? (
+          {data.students.length ? isLesson ? (
+            <LessonRoster students={data.students} item={item} />
+          ) : (
             <SelectField
               label="Tələbə"
               name="student_id"
@@ -243,7 +284,7 @@ function PortalForm({ modal, data, busy, formError, formSubmit, close, selectedD
           </Field>
         </>
       )}
-      {isLesson && <LessonFields item={item} selectedDay={selectedDay} />}
+      {isLesson && <LessonFields item={item} selectedDay={selectedDay} liveLessonsEnabled={data.liveLessonsEnabled} />}
       {kind === 'payment' && <PaymentFields today={data.today} />}
       {(kind === 'material' || kind === 'post') && <ContentFields kind={kind} item={item} />}
       {formError && <p role="alert" className="form-error">{formError}</p>}
@@ -281,26 +322,33 @@ function Invitation({ code }) {
   );
 }
 
-function LessonDetail({ item, student, tutor, tutorName, busy, open, quick, setConfirm }) {
-  const learner = student(item.student_id);
-  const person = tutor ? learner?.name : tutorName;
+function LessonDetail({ item, student, tutor, tutorName, liveLessonsEnabled, busy, open, quick, setConfirm }) {
+  const learners = lessonStudents(item).map(student).filter(Boolean);
+  const people = tutor ? learners.map(learner => learner.name) : [tutorName];
+  const group = (item.student_count ?? learners.length) > 1;
+  const lessonLevel = !group && learners[0]?.level;
   const scheduled = item.status === 'scheduled';
+  const live = item.meeting_type === 'live';
   return (
     <>
-      {learner?.level && <Badge>{learner.level}</Badge>}
+      {group ? <Badge>Qrup dərsi · {item.student_count ?? learners.length} tələbə</Badge> : lessonLevel && <Badge>{lessonLevel}</Badge>}
       <h2 className="mt-3 mb-5 text-2xl font-semibold leading-snug text-[#426333]">{item.title}</h2>
-      {person && <div className="mb-5 flex items-center gap-2.5 text-sm"><Avatar name={person} /><strong>{person}</strong></div>}
+      {people.length > 0 && <div className="mb-5 flex flex-wrap items-center gap-2.5 text-sm"><Avatar name={people[0]} /><strong>{people.join(', ')}</strong></div>}
       <div className="mb-4 flex flex-wrap gap-5 text-sm text-[#566c55]">
         <span className="inline-flex items-center gap-2"><CalendarDays size={18} /> {fmtDate(item.starts_at)}</span>
         <span className="inline-flex items-center gap-2"><Clock size={18} /> {fmtTime(item.starts_at)} · {item.duration} dəqiqə</span>
       </div>
       <Badge tone={scheduled ? 'blue' : 'neutral'}>{lessonStatuses[item.status]}</Badge>
-      {item.meeting_url && scheduled && (
+      {live && liveLessonsEnabled && scheduled && (
+        <Link className="btn primary full mt-5" to={liveLessonPath(item.id)}><Video size={18} /> Canlı dərs otağı</Link>
+      )}
+      {!live && item.meeting_url && scheduled && (
         <a className="btn primary full mt-5" href={item.meeting_url} target="_blank" rel="noopener noreferrer">
           <Video size={18} /> Dərsə qoşul <ExternalLink size={16} />
         </a>
       )}
-      {!item.meeting_url && <p className={hintClass + ' mt-5 flex items-center gap-2'}><Video size={16} /> Dərs keçidi hələ əlavə edilməyib.</p>}
+      {scheduled && !live && !item.meeting_url && <p className={hintClass + ' mt-5 flex items-center gap-2'}><Video size={16} /> Dərs keçidi hələ əlavə edilməyib.</p>}
+      {scheduled && live && !liveLessonsEnabled && <p className={hintClass + ' mt-5'}>Canlı dərs otağı hazırda əlçatan deyil.</p>}
       {tutor && scheduled && (
         <>
           <div className="mt-4 flex flex-wrap items-center gap-2.5">
@@ -445,7 +493,7 @@ export default function PortalDialogs({ data, tutor, signedIn, signIn, modal, se
             {kind === 'invite' && <Invitation code={modal.code} />}
             {kind === 'read' && <MaterialReading item={modal.item} tutor={tutor} busy={busy} open={open} setConfirm={setConfirm} />}
             {kind === 'lessonDetail' && (
-              <LessonDetail item={modal.item} student={student} tutor={tutor} tutorName={data.tutorName} busy={busy} open={open} quick={quick} setConfirm={setConfirm} />
+              <LessonDetail item={modal.item} student={student} tutor={tutor} tutorName={data.tutorName} liveLessonsEnabled={data.liveLessonsEnabled} busy={busy} open={open} quick={quick} setConfirm={setConfirm} />
             )}
             {formTitles[kind] && (
               <PortalForm key={kind + ':' + (modal.item?.id || '')} {...{ modal, data, busy, formError, formSubmit, close, selectedDay, open, invite, setConfirm }} />

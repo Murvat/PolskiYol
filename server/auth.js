@@ -19,8 +19,9 @@ export function getChatGPTUser(request) {
   return { userId, displayName, email };
 }
 
-export function accountLinks(invite) {
-  const returnTo = new URL('/account', 'https://app.local');
+export function accountLinks(invite, livePath) {
+  const live = !invite && typeof livePath === 'string' && /^\/lessons\/[a-z0-9_-]{1,100}\/live$/i.test(livePath);
+  const returnTo = new URL(live ? livePath : '/account', 'https://app.local');
   if (invite) returnTo.searchParams.set('invite', invite);
   return {
     signIn: signInPath + '?return_to=' + encodeURIComponent(returnTo.pathname + returnTo.search),

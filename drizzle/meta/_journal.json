@@ -8,6 +8,20 @@
       "when": 1790020526280,
       "tag": "0000_jazzy_vanisher",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1795824000000,
+      "tag": "0001_lesson_rosters",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795824001000,
+      "tag": "0002_live_classrooms",
+      "breakpoints": true
     }
   ]
 }

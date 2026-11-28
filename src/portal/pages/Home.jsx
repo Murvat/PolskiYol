@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { dayKey, fmtDate, fmtTime, money } from '../format.js';
+import { lessonStudents, liveLessonPath } from '../lessons.js';
 import { Avatar, Badge, Blank } from '../shared.jsx';
 import { MaterialCard } from './Materials.jsx';
 import { PostCard } from './Feed.jsx';
@@ -33,8 +34,12 @@ function StatCard({ to, icon: Icon, tone, label, value, unit, children }) {
 }
 
 function LessonRow({ lesson, students, tutorName, tutor, open }) {
-  const studentIndex = students.findIndex(student => student.id === lesson.student_id);
+  const studentIds = lessonStudents(lesson);
+  const studentIndex = students.findIndex(student => student.id === studentIds[0]);
   const student = students[studentIndex];
+  const groupSize = lesson.student_count ?? studentIds.length;
+  const group = groupSize > 1;
+  const name = tutor ? group ? `${groupSize} tələbə` : student?.name : tutorName;
   const accent = { B1: 'purple', A1: 'amber' };
 
   return (
@@ -44,12 +49,12 @@ function LessonRow({ lesson, students, tutorName, tutor, open }) {
         <small>{lesson.duration} dəqiqə</small>
       </span>
       <span className={`lesson-line ${accent[student?.level] || ''}`} aria-hidden="true" />
-      <Avatar name={student?.name || tutorName} tone={Math.max(0, studentIndex)} />
+      <Avatar name={name || ''} tone={Math.max(0, studentIndex)} />
       <span className="lesson-info">
-        <strong>{tutor ? student?.name : tutorName}</strong>
+        <strong>{name}</strong>
         <span>{lesson.title}</span>
       </span>
-      <Badge tone={student?.level === 'B1' ? 'purple' : 'green'}>{student?.level || 'A1'}</Badge>
+      <span>{group ? <Badge>Qrup</Badge> : student?.level && <Badge tone={student.level === 'B1' ? 'purple' : 'green'}>{student.level}</Badge>}</span>
       <ChevronRight className="muted" size={17} />
     </button>
   );
@@ -119,10 +124,14 @@ function WeekAgenda({ data, tutor, scheduled, selectedDay, setSelectedDay, href,
   );
 }
 
-function NextLesson({ lesson, students, tutorName, tutor, open }) {
-  const student = students.find(item => item.id === lesson?.student_id);
-  const name = tutor ? student?.name || 'Tələbə' : tutorName;
-  const [title, subtitle = 'Fərdi polyak dili dərsi'] = lesson?.title.split(' — ') ?? [];
+function NextLesson({ lesson, students, tutorName, tutor, liveLessonsEnabled, open }) {
+  const studentIds = lessonStudents(lesson);
+  const student = students.find(item => item.id === studentIds[0]);
+  const groupSize = lesson?.student_count ?? studentIds.length;
+  const group = groupSize > 1;
+  const name = tutor ? group ? `${groupSize} tələbə` : student?.name || 'Tələbə' : tutorName;
+  const [title, subtitle = group ? 'Qrup dərsi' : 'Polyak dili dərsi'] = lesson?.title.split(' — ') ?? [];
+  const live = liveLessonsEnabled && lesson?.meeting_type === 'live';
 
   return (
     <section className="next-lesson">
@@ -139,12 +148,16 @@ function NextLesson({ lesson, students, tutorName, tutor, open }) {
             <Avatar name={name} />
             <div>
               <strong>{name}</strong>
-              <span>{student?.level && `${student.level} səviyyəsi · `}{lesson.duration} dəqiqə</span>
+              <span>{!group && student?.level && `${student.level} səviyyəsi · `}{lesson.duration} dəqiqə</span>
             </div>
           </div>
-          <button type="button" className="btn light full" onClick={() => open('lessonDetail', lesson)}>
-            Dərsə bax <ArrowRight size={17} />
-          </button>
+          {live ? (
+            <Link className="btn light full" to={liveLessonPath(lesson.id)}>Canlı dərs otağı <Video size={17} /></Link>
+          ) : (
+            <button type="button" className="btn light full" onClick={() => open('lessonDetail', lesson)}>
+              Dərsə bax <ArrowRight size={17} />
+            </button>
+          )}
         </>
       ) : (
         <>
@@ -266,7 +279,7 @@ export default function Home({ data, tutor, href, open, selectedDay, setSelected
           </section>
         </div>
         <aside className="dashboard-right">
-          <NextLesson lesson={nextLesson} students={data.students} tutorName={data.tutorName} tutor={tutor} open={open} />
+          <NextLesson lesson={nextLesson} students={data.students} tutorName={data.tutorName} tutor={tutor} liveLessonsEnabled={data.liveLessonsEnabled} open={open} />
           <QuickPanel tutor={tutor} student={data.students[0]} open={open} />
           <div className="language-note">
             <span>🇦🇿</span><span className="dashed-line" /><BookOpen size={19} />

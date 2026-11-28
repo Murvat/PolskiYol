@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { accountLinks, getChatGPTUser } from './auth.js';
 import { actorFor, database, hash, portalData, token } from './data.js';
 import { demoData } from './demo.js';
+import { liveFeatureEnabled, liveHandlers } from './live/index.js';
 
 const id = z.string().min(1).max(100);
 const shortText = z.string().trim().min(1).max(180);
@@ -30,11 +31,16 @@ const schemas = {
   invite: z.object({ id }),
   save_lesson: z.object({
     id: id.optional(),
-    student_id: id,
+    student_id: id.optional(),
+    student_ids: z.array(id).min(1).max(5).optional(),
     title: shortText,
     starts_at: z.string().datetime(),
     duration: z.number().int().min(15).max(240),
     meeting_url: secureUrl,
+    meeting_type: z.enum(['external', 'live']).optional(),
+  }).refine(values => values.student_ids || values.student_id, {
+    path: ['student_ids'],
+    message: 'Ən azı bir tələbə seçin.',
   }),
   lesson_status: z.object({ id, status: z.enum(['completed', 'cancelled']) }),
   save_payment: z.object({
@@ -100,12 +106,12 @@ async function session(request, env, params) {
     if (identity && !demo) {
       const db = database(env);
       const actor = await actorFor(db, identity);
-      if (actor) data = await portalData(db, actor);
+      if (actor) data = await portalData(db, actor, liveFeatureEnabled(env));
     }
     data ??= demoData(demo === 'student' ? 'student' : 'tutor');
   }
 
-  return json({ data, user, ...accountLinks(params.get('invite')) });
+  return json({ data, user, ...accountLinks(params.get('invite'), params.get('return_to')) });
 }
 
 async function activate(db, env, user, values) {
@@ -131,36 +137,89 @@ async function join(db, user, values, now) {
   if (!result.meta.changes) throw new AppError('Dəvət etibarsızdır və ya vaxtı bitib. Müəlliminizdən yeni dəvət istəyin.');
 }
 
-async function saveLesson(db, values, recordId) {
-  await requireStudent(db, values.student_id);
+async function saveLesson(db, values, recordId, liveEnabled) {
+  const studentIds = [...new Set(values.student_ids ?? [values.student_id])];
+  const placeholders = studentIds.map(() => '?').join(', ');
+  const { results: students } = await db.prepare(`SELECT id FROM students WHERE id IN (${placeholders})`)
+    .bind(...studentIds).all();
+  if (students.length !== studentIds.length) throw new AppError('Tələbə tapılmadı.', 404);
+
+  const existing = values.id
+    ? await db.prepare('SELECT meeting_type FROM lessons WHERE id = ?').bind(recordId).first()
+    : null;
+  if (values.id && !existing) throw new AppError('Qeyd tapılmadı.', 404);
+
+  const meetingType = values.meeting_type ?? (values.meeting_url ? 'external' : existing?.meeting_type ?? (liveEnabled ? 'live' : 'external'));
+  if (meetingType === 'live' && !liveEnabled && existing?.meeting_type !== 'live') {
+    throw new AppError('Canlı dərslər hələ aktiv deyil.', 409);
+  }
+  const writeId = crypto.randomUUID();
   const end = new Date(Date.parse(values.starts_at) + values.duration * 60000).toISOString();
   const openSlot = `NOT EXISTS (
     SELECT 1 FROM lessons WHERE status = 'scheduled' AND id != ?
       AND julianday(starts_at) < julianday(?)
       AND julianday(starts_at, '+' || duration || ' minutes') > julianday(?)
   )`;
-  const fields = [values.student_id, values.title, values.starts_at, values.duration, values.meeting_url];
+  const fields = [values.title, values.starts_at, values.duration, meetingType === 'external' ? values.meeting_url : '', meetingType, writeId];
   const range = [recordId, end, values.starts_at];
 
-  const result = values.id
-    ? await db.prepare(`
-        UPDATE lessons SET student_id = ?, title = ?, starts_at = ?, duration = ?, meeting_url = ?
+  const write = values.id
+    ? db.prepare(`
+        UPDATE lessons SET title = ?, starts_at = ?, duration = ?, meeting_url = ?, meeting_type = ?, schedule_write_id = ?
         WHERE id = ? AND ${openSlot}
-      `).bind(...fields, recordId, ...range).run()
-    : await db.prepare(`
-        INSERT INTO lessons (id, student_id, title, starts_at, duration, meeting_url, status)
-        SELECT ?, ?, ?, ?, ?, ?, 'scheduled' WHERE ${openSlot}
-      `).bind(recordId, ...fields, ...range).run();
+        AND NOT EXISTS (SELECT 1 FROM live_rooms WHERE lesson_id = lessons.id)
+      `).bind(...fields, recordId, ...range)
+    : db.prepare(`
+        INSERT INTO lessons (id, title, starts_at, duration, meeting_url, meeting_type, schedule_write_id, status)
+        SELECT ?, ?, ?, ?, ?, ?, ?, 'scheduled' WHERE ${openSlot}
+      `).bind(recordId, ...fields, ...range);
+
+  // D1 runs the batch in one transaction. An overlap can make the first statement
+  // a no-op, so the roster changes only if this exact schedule write succeeded.
+  const written = 'EXISTS (SELECT 1 FROM lessons WHERE id = ? AND schedule_write_id = ?)';
+  const [result] = await db.batch([
+    write,
+    db.prepare(`DELETE FROM lesson_students WHERE lesson_id = ? AND ${written}`)
+      .bind(recordId, recordId, writeId),
+    ...studentIds.map(studentId => db.prepare(`
+        INSERT INTO lesson_students (lesson_id, student_id) SELECT ?, ? WHERE ${written}
+      `).bind(recordId, studentId, recordId, writeId)),
+  ]);
 
   if (!result.meta.changes) {
     if (values.id && !await db.prepare('SELECT id FROM lessons WHERE id = ?').bind(recordId).first()) {
       throw new AppError('Qeyd tapılmadı.', 404);
     }
+    if (values.id && await db.prepare('SELECT 1 FROM live_rooms WHERE lesson_id = ?').bind(recordId).first()) {
+      throw new AppError('Canlı dərs başladıqdan sonra cədvəli dəyişmək mümkün deyil.', 409);
+    }
     throw new AppError('Bu vaxtda başqa dərsiniz var. Fərqli vaxt seçin.', 409);
   }
 }
 
-async function postPortal(request, env, origin) {
+async function deleteStudent(db, studentId) {
+  const hasActiveRoom = `EXISTS (
+    SELECT 1 FROM lesson_students ls JOIN live_rooms r ON r.lesson_id = ls.lesson_id
+    WHERE ls.student_id = ? AND r.state IN ('starting', 'live', 'ending')
+  )`;
+  const [, deleted] = await db.batch([
+    db.prepare(`
+      UPDATE lessons SET status = 'cancelled' WHERE status = 'scheduled'
+        AND EXISTS (SELECT 1 FROM lesson_students WHERE lesson_id = lessons.id AND student_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM lesson_students WHERE lesson_id = lessons.id AND student_id != ?)
+        AND NOT ${hasActiveRoom}
+    `).bind(studentId, studentId, studentId),
+    db.prepare(`DELETE FROM students WHERE id = ? AND NOT ${hasActiveRoom}`).bind(studentId, studentId),
+  ]);
+  if (!deleted.meta.changes) {
+    if (await db.prepare(`SELECT 1 WHERE ${hasActiveRoom}`).bind(studentId).first()) {
+      throw new AppError('Tələbəni silməzdən əvvəl canlı dərsi bitirin.', 409);
+    }
+    throw new AppError('Qeyd tapılmadı.', 404);
+  }
+}
+
+async function postPortal(request, env, origin, context) {
   if (request.headers.get('origin') !== origin) throw new AppError('Sorğuya icazə verilmir.', 403);
   const contentType = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
   if (contentType !== 'application/json') throw new AppError('JSON gözlənilir.', 415);
@@ -219,11 +278,17 @@ async function postPortal(request, env, origin) {
       return json({ ok: true, code, expires });
     }
     case 'save_lesson':
-      await saveLesson(db, values, recordId);
+      await saveLesson(db, values, recordId, liveFeatureEnabled(env));
       break;
-    case 'lesson_status':
+    case 'lesson_status': {
       await update(db, 'UPDATE lessons SET status = ? WHERE id = ?', values.status, recordId);
+      if (await db.prepare("SELECT 1 FROM live_rooms WHERE lesson_id = ? AND state != 'ended'").bind(recordId).first()) {
+        const cleanup = liveHandlers.scheduled(env);
+        if (context?.waitUntil) context.waitUntil(cleanup);
+        else await cleanup;
+      }
       break;
+    }
     case 'save_payment':
       await requireStudent(db, values.student_id);
       await db.prepare("INSERT INTO payments (id, student_id, title, amount, due_date, status) VALUES (?, ?, ?, ?, ?, 'pending')")
@@ -253,7 +318,8 @@ async function postPortal(request, env, origin) {
       break;
     }
     case 'delete':
-      await update(db, `DELETE FROM ${values.entity} WHERE id = ?`, recordId);
+      if (values.entity === 'students') await deleteStudent(db, recordId);
+      else await update(db, `DELETE FROM ${values.entity} WHERE id = ?`, recordId);
       break;
     case 'send_message':
       await requireStudent(db, values.student_id);
@@ -268,7 +334,7 @@ async function postPortal(request, env, origin) {
   return json({ ok: true, id: recordId });
 }
 
-export async function handleApi(request, env) {
+export async function handleApi(request, env, context) {
   const { pathname, origin, searchParams } = new URL(request.url);
   if (pathname !== '/api/session' && pathname !== '/api/portal') return null;
 
@@ -280,9 +346,9 @@ export async function handleApi(request, env) {
       const db = database(env);
       const actor = await actorFor(db, user);
       if (!actor) throw new AppError('Hesabınıza giriş hələ verilməyib.', 403);
-      return json(await portalData(db, actor));
+      return json(await portalData(db, actor, liveFeatureEnabled(env)));
     }
-    if (request.method === 'POST' && pathname === '/api/portal') return await postPortal(request, env, origin);
+    if (request.method === 'POST' && pathname === '/api/portal') return await postPortal(request, env, origin, context);
     return json({ error: 'Sorğu metoduna icazə verilmir.' }, 405, { Allow: pathname === '/api/session' ? 'GET' : 'GET, POST' });
   } catch (error) {
     if (error instanceof AppError) return json({ error: error.message }, error.status);

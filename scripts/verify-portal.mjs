@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { Miniflare } from "miniflare";
+import { createLiveHandlers } from "../server/live/index.js";
 const serverRoot = new URL("../dist/server/", import.meta.url).pathname;
 const paths = (await readdir(serverRoot, { recursive: true }))
   .filter((p) => p.endsWith(".js"))
@@ -18,15 +19,25 @@ const mf = new Miniflare({
 });
 const db = await mf.getD1Database("DB");
 try {
-  const sql = await readFile(
-    new URL("../drizzle/0000_jazzy_vanisher.sql", import.meta.url),
-    "utf8",
-  );
-  for (const statement of sql
-    .split("--> statement-breakpoint")
-    .map((s) => s.trim())
-    .filter(Boolean))
-    await db.prepare(statement).run();
+  const migrations = new URL("../drizzle/", import.meta.url);
+  const applyMigration = async (file) => {
+    const sql = await readFile(new URL(file, migrations), "utf8");
+    await db.batch(sql.split("--> statement-breakpoint").map(s => s.trim()).filter(Boolean)
+      .map(statement => db.prepare(statement)));
+  };
+  const files = (await readdir(migrations)).filter(file => file.endsWith(".sql")).sort();
+  await applyMigration(files[0]);
+  await db.batch([
+    db.prepare("INSERT INTO students (id, name, email, level, goal, created_at) VALUES ('legacy-student', 'Legacy', 'legacy@example.test', 'A1', '', '2020-01-01')"),
+    db.prepare("INSERT INTO lessons (id, student_id, title, starts_at, duration, meeting_url) VALUES ('legacy-lesson', 'legacy-student', 'Legacy', '2020-01-01', 60, 'https://example.com/legacy')"),
+  ]);
+  for (const file of files.slice(1)) await applyMigration(file);
+  const migrated = await db.prepare("SELECT l.meeting_url, l.meeting_type, ls.student_id FROM lessons l JOIN lesson_students ls ON l.id = ls.lesson_id WHERE l.id = 'legacy-lesson'").first();
+  assert.deepEqual(migrated, { meeting_url: "https://example.com/legacy", meeting_type: "external", student_id: "legacy-student" });
+  await db.batch([
+    db.prepare("DELETE FROM lessons WHERE id = 'legacy-lesson'"),
+    db.prepare("DELETE FROM students WHERE id = 'legacy-student'"),
+  ]);
   let checks = 0;
   async function request(user, body, status = 200) {
     const headers = {};
@@ -66,6 +77,10 @@ try {
     checks++;
     return response.json();
   }
+  const next = await session("?return_to=%2Flessons%2Flesson-123%2Flive");
+  assert.match(decodeURIComponent(next.signIn), /return_to=\/lessons\/lesson-123\/live$/);
+  const unsafeNext = await session("?return_to=%2F%2Fexample.test");
+  assert.match(decodeURIComponent(unsafeNext.signIn), /return_to=\/account$/);
   const demo = await session("?demo=student");
   assert.equal(demo.data.role, "student");
   assert.equal(demo.data.demo, true);
@@ -224,9 +239,84 @@ try {
     { action: "delete", entity: "students", id: b.id },
     403,
   );
+  const group = await request("owner", {
+    action: "save_lesson", student_ids: [a.id, b.id], title: "Group lesson",
+    starts_at: new Date(Date.now() + 60000).toISOString(), duration: 60, meeting_url: "",
+  });
+  const ownerGroup = (await request("owner")).lessons.find(item => item.id === group.id);
+  assert.deepEqual(new Set(ownerGroup.student_ids), new Set([a.id, b.id]));
+  const studentGroup = (await request("student-b")).lessons.find(item => item.id === group.id);
+  assert.deepEqual(studentGroup.student_ids, [b.id]);
+
+  const recentEnds = [];
+  let pauseIssuance;
+  const fake = {
+    id: "fake",
+    isConfigured: () => true,
+    issueJoinCredentials: async ({ role }) => {
+      await pauseIssuance?.();
+      return { role };
+    },
+    parseEvent: async ({ request }) => request.json(),
+    endSession: async ({ sessionId }) => recentEnds.push(sessionId),
+  };
+  const live = createLiveHandlers({ fake });
+  const env = { DB: db, LIVE_LESSONS_ENABLED: "true", LIVE_LESSON_PROVIDER: "fake" };
+  await db.prepare("UPDATE lessons SET meeting_type = 'live' WHERE id = ?").bind(group.id).run();
+  async function liveRequest(user, action = "", expected = 200) {
+    const response = await live.fetch(new Request("http://app.local/api/lessons/" + group.id + "/live" + (action ? "/" + action : ""), {
+      method: action ? "POST" : "GET",
+      headers: { Origin: "http://app.local", "oai-authenticated-user-id": user, "oai-authenticated-user-email": user + "@example.test" },
+    }), env);
+    assert.equal(response.status, expected);
+    assert.match(response.headers.get("cache-control"), /private, no-store/);
+    checks++;
+    return response.json();
+  }
+  assert.equal((await liveRequest("student-a")).state, "waiting");
+  await liveRequest("student-a", "start", 403);
+  await liveRequest("student-a", "join", 409);
+  await liveRequest("stranger", "join", 403);
+  const starts = await Promise.all([liveRequest("owner", "start"), liveRequest("owner", "start")]);
+  assert.deepEqual(starts.map(item => item.state), ["starting", "starting"]);
+  assert.deepEqual(await liveRequest("owner", "join"), { provider: "fake", credentials: { role: "tutor" } });
+  await liveRequest("student-a", "join", 409);
+  const room = await db.prepare("SELECT room_key FROM live_rooms WHERE lesson_id = ?").bind(group.id).first();
+  async function providerEvent(type, sessionId) {
+    const response = await live.fetch(new Request("http://app.local/api/lessons/live/events/fake", {
+      method: "POST", body: JSON.stringify({ type, sessionId, roomKey: room.room_key }),
+    }), env);
+    assert.equal(response.status, 200);
+  }
+  await providerEvent("started", "instance");
+  await providerEvent("started", "instance");
+  assert.deepEqual(await liveRequest("student-a", "join"), { provider: "fake", credentials: { role: "student" } });
+  await liveRequest("student-b", "end", 403);
+  await request("owner", { action: "delete", entity: "students", id: a.id }, 409);
+  await request("owner", {
+    action: "save_lesson", id: group.id, student_ids: [b.id], title: "Roster change",
+    starts_at: ownerGroup.starts_at, duration: 60, meeting_url: "",
+  }, 409);
+  let releaseCredentials;
+  let beginIssuance;
+  const issuing = new Promise(resolve => { beginIssuance = resolve; });
+  const blocked = new Promise(resolve => { releaseCredentials = resolve; });
+  pauseIssuance = () => { beginIssuance(); return blocked; };
+  const racingJoin = liveRequest("student-a", "join", 409);
+  await issuing;
+  assert.equal((await liveRequest("owner", "end")).state, "ended");
+  releaseCredentials();
+  await racingJoin;
+  pauseIssuance = null;
+  await liveRequest("owner", "end");
+  await liveRequest("student-a", "join", 409);
+  await providerEvent("started", "late-instance");
+  assert.deepEqual(recentEnds, ["instance", "late-instance"]);
+  assert.equal((await liveRequest("student-a")).state, "ended");
+
   await request("owner", { action: "delete", entity: "students", id: a.id });
   await request("student-a", null, 403);
-  for (const table of ["lessons", "payments", "messages"]) {
+  for (const table of ["lesson_students", "payments", "messages"]) {
     const count = await db
       .prepare(`SELECT count(*) AS n FROM ${table} WHERE student_id=?`)
       .bind(a.id)
@@ -234,6 +324,25 @@ try {
     assert.equal(count.n, 0);
     checks++;
   }
+  assert.equal((await request("student-b")).lessons.find(item => item.id === group.id).id, group.id);
+  assert.equal((await request("owner")).lessons.find(item => item.id === lesson.id).status, "cancelled");
+  assert.equal(studentGroup.student_count, 2);
+  const staleRoom = await request("owner", {
+    action: "save_lesson", student_ids: [b.id], title: "Expired live lesson",
+    starts_at: new Date(Date.now() - 3600000).toISOString(), duration: 30, meeting_url: "",
+  });
+  await db.batch([
+    db.prepare("UPDATE lessons SET meeting_type = 'live' WHERE id = ?").bind(staleRoom.id),
+    db.prepare("INSERT INTO live_rooms (lesson_id, provider, room_key, state, session_id, closes_at) VALUES (?, 'fake', 'expired-room', 'live', 'expired-instance', ?)").bind(staleRoom.id, new Date(Date.now() - 60000).toISOString()),
+  ]);
+  await live.scheduled(env);
+  assert.ok(recentEnds.includes("expired-instance"));
+  assert.equal((await db.prepare("SELECT state FROM live_rooms WHERE lesson_id = ?").bind(staleRoom.id).first()).state, "ended");
+
+  const removedMember = await live.fetch(new Request("http://app.local/api/lessons/" + group.id + "/live", {
+    headers: { "oai-authenticated-user-id": "student-a", "oai-authenticated-user-email": "student-a@example.test" },
+  }), env);
+  assert.equal(removedMember.status, 403);
   const csrf = await mf.dispatchFetch("http://app.local/api/portal", {
     method: "POST",
     headers: {
@@ -250,6 +359,7 @@ try {
     "/home",
     "/students?demo=tutor",
     "/lessons?demo=tutor",
+    "/lessons/" + group.id + "/live",
     "/materials?demo=tutor",
     "/feed?demo=tutor",
     "/messages?demo=tutor",
@@ -281,7 +391,7 @@ try {
     JSON.stringify({
       passed: checks,
       result:
-        "Authorization, student isolation, invitations, persistence, schedule conflicts, chat, payment records, deletions, CSRF, and route delivery verified.",
+        "Portal checks, populated D1 migration, roster isolation, live room lifecycle, concurrent join and end, and classroom routes verified.",
     }),
   );
 } finally {

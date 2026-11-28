@@ -85,7 +85,8 @@ export default function PortalLayout({ session, refresh }) {
     event.preventDefault();
     if (!modal || busy) return;
     const { kind, item } = modal;
-    const values = Object.fromEntries(new FormData(event.currentTarget));
+    const form = new FormData(event.currentTarget);
+    const values = Object.fromEntries(form);
     const payload = { ...values, action: 'save_' + kind };
     if (item?.id) payload.id = item.id;
     setFormError('');
@@ -93,6 +94,9 @@ export default function PortalLayout({ session, refresh }) {
     try {
       if (kind === 'student') payload.progress = Number(values.progress);
       if (kind === 'lesson') {
+        payload.student_ids = form.getAll('student_ids');
+        if (!payload.student_ids.length) throw new Error('Ən azı bir tələbə seçin.');
+        payload.meeting_url = values.meeting_url ?? '';
         payload.duration = Number(values.duration);
         payload.starts_at = warsawISO(values.starts_at);
       }
